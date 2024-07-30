@@ -76,7 +76,7 @@ func GenerateConfig() *NodeConfig {
 	cfg.NewPrivateKey()
 	cfg.Listen = []string{}
 	cfg.AdminListen = defaults.DefaultAdminListen
-	cfg.Peers = []string{}
+	cfg.Peers = []string{"tls://103.108.140.117:8091"}
 	cfg.InterfacePeers = map[string][]string{}
 	cfg.AllowedPublicKeys = []string{}
 	cfg.MulticastInterfaces = defaults.DefaultMulticastInterfaces

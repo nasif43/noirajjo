@@ -21,6 +21,6 @@ func getDefaults() platformDefaultParameters {
 		// TUN
 		MaximumIfMTU:  65535,
 		DefaultIfMTU:  65535,
-		DefaultIfName: "Yggdrasil",
+		DefaultIfName: "Noirajjo",
 	}
 }

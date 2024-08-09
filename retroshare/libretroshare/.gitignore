@@ -1,0 +1,15 @@
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+# Ignore Gradle local options
+local.properties
+
+# Ignore Qt Creator local CMake configuration
+CMakeLists.txt.user
+
+# Build artifacts
+Makefile.libretroshare
+*.a

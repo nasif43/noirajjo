@@ -1,0 +1,500 @@
+/*
+ * libretroshare Android AAR library gradle builder
+ *
+ * Copyright (C) 2022  Gioacchino Mazzurco <gio@retroshare.cc>
+ * Copyright (C) 2022  Asociación Civil Altermundi <info@altermundi.net>
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ */
+
+/*
+ * Set minumum Android API level supported by this build passing
+ * -PANDROID_MIN_API_LEVEL=16 (change 16 to what you need) on the gradle command
+ * line.
+ *
+ * LIBRETROSHARE_SOURCE_VERSION Set source version ex:
+ * -PLIBRETROSHARE_SOURCE_VERSION="$(git describe --always)"
+ *
+ * Optionally set JNI_NATIVE_LIBS_ARCHS to a space separated target CPU
+ * architectures list named as seen in AAR native libraries directories passing
+ * -PJNI_NATIVE_LIBS_ARCHS="arm64-v8a armeabi-v7a" defaults to all architectures
+ * supported by current script at current Android minimum API
+ *
+ * Optionally set NATIVE_TOOLCHAINS_DIR for easier reuse of toolchains which
+ * take a lot to build and doesn't change often
+ * -PNATIVE_TOOLCHAINS_DIR="/native/toolchains/path"
+ *
+ * Optionally set environement variables defined in prepare-toolchain-clang.sh
+ * to further customize the build
+ * export RS_EXTRA_CMAKE_OPTS="-DRS_DEVELOPMENT_BUILD=ON"
+ */
+
+buildscript
+{
+	repositories
+	{
+		// The order in which you list these repositories matter.
+		google()
+		mavenCentral()
+	}
+
+	dependencies
+	{
+		classpath 'com.android.tools.build:gradle:7.1.+'
+	}
+}
+
+allprojects
+{
+	repositories
+	{
+		// The order in which you list these repositories matter.
+		google()
+		mavenCentral()
+	}
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
+
+ext.getAndroidMinApiLevel =
+{ ->
+	if(project.hasProperty('ANDROID_MIN_API_LEVEL'))
+	{
+		return ANDROID_MIN_API_LEVEL.toInteger();
+	}
+	else
+	{
+		return 16
+	}
+}
+
+ext.getJniNativeLibsArchs =
+{ ->
+	if(project.hasProperty('JNI_NATIVE_LIBS_ARCHS'))
+	{
+		return JNI_NATIVE_LIBS_ARCHS.split(' ') as List
+	}
+	else
+	{
+		if(getAndroidMinApiLevel() <= 16)
+		{
+			return ['armeabi-v7a']
+		}
+		else
+		{
+			return ['arm64-v8a', 'armeabi-v7a']
+		}
+	}
+}
+
+ext.getLibretroshareSourceVersion =
+{ ->
+	if(project.hasProperty('LIBRETROSHARE_SOURCE_VERSION'))
+	{
+		return LIBRETROSHARE_SOURCE_VERSION
+	}
+	else
+	{
+		return 'unspecified'
+	}
+}
+
+ext.getNativeToolchainsDir =
+{ ->
+	if(project.hasProperty('NATIVE_TOOLCHAINS_DIR'))
+	{
+		return NATIVE_TOOLCHAINS_DIR
+	}
+	else
+	{
+		return "${buildDir}/native_toolchains/"
+	}
+}
+
+ext.getRsExtraCmakeOpts =
+{ ->
+	if(project.hasProperty('RS_EXTRA_CMAKE_OPTS'))
+	{
+		return RS_EXTRA_CMAKE_OPTS
+	}
+	else
+	{
+		return ""
+	}
+}
+
+ext.getjniLibsDir =
+{
+	pBuildType ->
+	return "${buildDir}/native_libs/${pBuildType.toLowerCase()}"
+}
+
+ext.getAssetsDir =
+{ ->
+	return "${buildDir}/android-assets/"
+}
+
+ext.getArtifactBaseName =
+{ ->
+	return project.name + "-MinApiLevel" + getAndroidMinApiLevel()
+}
+
+ext.getRsId =
+{ ->
+	return "org.retroshare.service"
+}
+
+ext.copyChecked =
+{
+	sourceFile,
+	destDir ->
+
+	assert file(sourceFile).exists()
+	assert file(destDir).exists()
+	copy
+	{
+		from sourceFile
+		into destDir
+	}
+	assert file("$destDir/${file(sourceFile).getName()}").exists()
+}
+
+ext.stripLib =
+{
+	toolchainPath,
+	libDir,
+	libFile,
+	stripOptions = "" ->
+
+	def stripCmd = "$toolchainPath/bin/llvm-strip"
+	assert file(stripCmd).exists()
+	assert file("${libDir}/${libFile}").exists()
+
+	exec
+	{
+		workingDir libDir
+		commandLine stripCmd, stripOptions, libFile
+	}
+}
+
+ext.buildLibretroshareNativeLib =
+{
+	pApiLevel, /* Android API level */
+	pAbi, /* Arch name as seen in AAR native libraries directories */
+	pNdkPath, /* Android NDK path */
+	pBuildType, /* Debug, Release... */
+	pReuseToolchain = true /* If true reuse previously built toochain */ ->
+
+	/* Convert pAbi into corresponding prepare toolchain ANDROID_NDK_ARCH */
+	def toolchainArch = "unsupported"
+	def libcxxsharedTriple = "unsupported"
+	switch(pAbi)
+	{
+	case "armeabi-v7a":
+		toolchainArch = "arm";
+		libcxxsharedTriple = "arm-linux-androideabi";
+		break;
+	case "arm64-v8a":
+		toolchainArch = "arm64";
+		libcxxsharedTriple = "aarch64-linux-android";
+		break;
+	default:
+		throw new GradleException(
+			"buildLibretroshareNativeLib unsupported pAbi: $pAbi" );
+		break;
+	}
+
+	def toolchainsWorkdir = getNativeToolchainsDir()
+	mkdir toolchainsWorkdir
+
+	def currToolchainPath = "$toolchainsWorkdir/$pApiLevel-$toolchainArch-${pBuildType.toLowerCase()}/"
+
+	def toolChainScriptPath = "${projectDir}/misc/Android/prepare-toolchain-clang.sh"
+
+	if(!pReuseToolchain || !file(currToolchainPath).exists())
+	{
+		exec
+		{
+			workingDir toolchainsWorkdir
+			environment "ANDROID_NDK_PATH", pNdkPath
+			environment "NATIVE_LIBS_TOOLCHAIN_PATH", currToolchainPath
+			environment "ANDROID_PLATFORM_VER", pApiLevel
+			environment "ANDROID_NDK_ARCH", toolchainArch
+			environment "RS_EXTRA_CMAKE_OPTS", getRsExtraCmakeOpts()
+			environment "TOOLCHAIN_BUILD_TYPE", pBuildType
+			commandLine toolChainScriptPath
+		}
+	}
+	else
+	{
+		exec
+		{
+			workingDir toolchainsWorkdir
+			environment "ANDROID_NDK_PATH", pNdkPath
+			environment "NATIVE_LIBS_TOOLCHAIN_PATH", currToolchainPath
+			environment "ANDROID_PLATFORM_VER", pApiLevel
+			environment "ANDROID_NDK_ARCH", toolchainArch
+			environment "RS_EXTRA_CMAKE_OPTS", getRsExtraCmakeOpts()
+			environment "TOOLCHAIN_BUILD_TYPE", pBuildType
+			commandLine toolChainScriptPath, 'build_libretroshare'
+		}
+	}
+
+	def currJniLibsDir = getjniLibsDir(pBuildType)
+	mkdir currJniLibsDir
+
+	def currAbiLibDir = "$currJniLibsDir/$pAbi/"
+	mkdir currAbiLibDir
+	copyChecked(
+		"${currToolchainPath}/sysroot/usr/lib/libretroshare.so",
+		currAbiLibDir )
+
+	copyChecked(
+		"${currToolchainPath}/sysroot/usr/lib/${libcxxsharedTriple}/libc++_shared.so",
+		currAbiLibDir )
+
+	copyChecked(
+		"${currToolchainPath}/sysroot/usr/lib/${libcxxsharedTriple}/${pApiLevel}/liblog.so",
+		currAbiLibDir )
+
+	/* Work around Android gradle stripping bug read more information near
+	 * android.buildTypes.debug packagingOptions.jniLibs.keepDebugSymbols
+	 * section of this file.
+	 * First save a release debuggable copy, then strip release */
+	if(pBuildType.equalsIgnoreCase("Release"))
+	{
+		copy
+		{
+			from currJniLibsDir
+			into getjniLibsDir("releaseWithDebuggingSymbols")
+		}
+
+		stripLib(currToolchainPath, currAbiLibDir, "libretroshare.so", "--strip-unneeded")
+		stripLib(currToolchainPath, currAbiLibDir, "libc++_shared.so", "--strip-debug")
+		stripLib(currToolchainPath, currAbiLibDir, "liblog.so", "--strip-debug")
+	}
+
+	def bdbootAssetDir = "${getAssetsDir()}/values"
+	mkdir bdbootAssetDir
+	copyChecked(
+		"${currToolchainPath}/sysroot/usr/share/retroshare/bdboot.txt",
+		bdbootAssetDir )
+}
+
+android
+{
+	// see https://stackoverflow.com/questions/27301867/what-is-compilesdkversion
+	compileSdkVersion 21
+
+	ndkVersion "21.0.6113669"
+
+	defaultConfig
+	{
+		minSdkVersion getAndroidMinApiLevel()
+		targetSdkVersion 28
+	
+		/* Prevent proguard run at applications build time, to alter
+		 * libretroshare Java classes that are used by libretroshare C++ code */
+		consumerProguardFiles 'misc/Android/proguard-keep-libretroshare-java-classes.pro'
+	}
+
+	setProperty("archivesBaseName", getArtifactBaseName())
+
+	buildTypes
+	{
+		/* To avoid Android Gradle plugin buggy behaviours with native libraries
+		 * debugging symbols, we disable stripping completely on it's side and
+		 * deal with them completely on our own. */
+
+		debug
+		{
+			debuggable true
+			jniDebuggable true
+
+			/* The following line was added as an attempt to avoid stripping of
+			 * debugging symbols, for debug build type
+			 * https://developer.android.com/reference/tools/gradle-api/7.3/com/android/build/api/dsl/PackagingOptions#doNotStrip%28kotlin.String%29=
+			 * https://developer.android.com/reference/tools/gradle-api/7.3/com/android/build/api/dsl/JniLibsPackagingOptions
+			 * but it ends up affecting all other build types too.
+			 * So enabling this without other countermeasures bloated release
+			 * library with debugging symbols.
+			 * Even more strange is that this is an old known bug at Google
+			 * https://issuetracker.google.com/issues/155215248
+			 * https://stackoverflow.com/questions/52972371/set-donotstrip-packagingoptions-to-a-specific-buildtype
+			 * but nothing substantial has been done to fix this even on newer
+			 * versions of Android Gradle plugin.
+			 * To work around this bug the release .so libraries must be
+			 * stripped in advance in buildLibretroshareNativeLib
+			 */
+			packagingOptions.jniLibs.keepDebugSymbols += "**/*.so"
+		}
+
+		release
+		{
+			/* The following was added as an attempt to ship separated debugging
+			 * symbols in release mode, but had no effect last time I tested
+			 * 2022/04/06
+			 * https://developer.android.com/studio/build/shrink-code#android_gradle_plugin_version_41_or_later
+			 */
+			//ndk.debugSymbolLevel 'FULL'
+		}
+
+		releaseWithDebuggingSymbols
+		{
+			/* Distribute the library compiled with release optimization plus
+			 * debugging symbols, this is not intended for direct usage
+			 * (altought possible), but to be able to symbolicate reports
+			 * from stripped releases build. To achieve this the release build
+			 * save a copy of libraries before stripping, so they are product of
+			 * same build ( => same code addressess ) but keeping the symbols
+			 * tables sections */
+		}
+	}
+
+	buildTypes.all
+	{
+		buildTypeObj ->
+
+		if(buildTypeObj.name == "releaseWithDebuggingSymbols")
+		{
+			/* To be useful to symbolicate reports from stripped releases,
+			 * release with debug symbols must be generated from the very same
+			 * release binaries just before stripping.
+			 * Make sure to not register extra build tasks for it. */
+			return;
+		}
+		
+		def buildTypeName = buildTypeObj.name.capitalize()
+		def preTaskName = "pre${buildTypeName}Build"
+		def buildNativeTaskName = "build${buildTypeName}RetroshareNativeLibs"
+
+		tasks.register(buildNativeTaskName)
+		{
+			doLast
+			{
+				delete getjniLibsDir(buildTypeName)
+
+				if(buildTypeName == "Release")
+				{
+					/* To be useful to symbolicate reports from stripped
+					 * releases, release with debug symbols must be generated
+					 * from the very same release binaries just before
+					 * stripping so make sure to delete those artifacts too */
+					delete getjniLibsDir("releaseWithDebuggingSymbols")
+				}
+
+				def pNdkPath = android.getNdkDirectory().getAbsolutePath()
+				getJniNativeLibsArchs().each
+				{
+					abi ->
+					buildLibretroshareNativeLib(
+						getAndroidMinApiLevel(), abi, pNdkPath, buildTypeName )
+				}
+			}
+		}
+
+		/* While `preBuild` seems always defined so one can simply use 
+		 * `preBuild.dependsOn prepareRetroshareNativeLibs` it is not the same with
+		 * `preDebugBuild` or any `pre${buildType}Build` that gives this error
+		 * if used directly
+		 * "Could not get unknown property 'preDebugBuild' for root project 'libretroshare' of type org.gradle.api.Project"
+		 * So make them depend on native build once they are added
+		 */
+		tasks.whenTaskAdded
+		{
+			task ->
+			if(task.name == preTaskName)
+			{
+				task.dependsOn buildNativeTaskName
+			}
+		}
+	}
+
+	sourceSets
+	{
+		main
+		{
+			java.srcDirs = [ 'src/rs_android/' ]
+			manifest.srcFile 'src/rs_android/AndroidManifest.xml'
+			assets.srcDirs = [ getAssetsDir() ]
+		}
+
+		debug
+		{
+			jniLibs.srcDirs = [ getjniLibsDir(name) ] // name == "debug"
+		}
+
+		release
+		{
+			jniLibs.srcDirs = [ getjniLibsDir(name) ]
+		}
+
+		releaseWithDebuggingSymbols
+		{
+			jniLibs.srcDirs = [ getjniLibsDir(name) ]
+		}
+	}
+
+	lintOptions
+	{
+		 disable 'LongLogTag'
+	}
+
+	 publishing
+	 {
+		multipleVariants
+		{
+			allVariants()
+		}
+	}
+}
+
+afterEvaluate
+{
+	publishing
+	{
+		// see https://developer.android.com/reference/tools/gradle-api/7.1/com/android/build/api/dsl/LibraryPublishing
+		publications
+		{
+			debug(MavenPublication)
+			{
+				groupId = getRsId()
+				artifactId "${getArtifactBaseName()}-$name" // name == "debug"
+				version getLibretroshareSourceVersion()
+				artifact bundleDebugAar
+			}
+			release(MavenPublication)
+			{
+				groupId = getRsId()
+				artifactId "${getArtifactBaseName()}-$name"
+				version getLibretroshareSourceVersion()
+				artifact bundleReleaseAar
+			}
+			releaseWithDebuggingSymbols(MavenPublication)
+			{
+				groupId = getRsId()
+				artifactId "${getArtifactBaseName()}-$name"
+				version getLibretroshareSourceVersion()
+				artifact bundleReleaseWithDebuggingSymbolsAar
+			}
+		}
+		repositories
+		{
+			maven
+			{
+				url =  uri("https://gitlab.com/api/v4/projects/${System.getenv('CI_PROJECT_ID')}/packages/maven")
+				name = "Gitlab"
+				credentials(HttpHeaderCredentials)
+				{
+					name = "Job-Token"
+					value = System.getenv("CI_JOB_TOKEN")
+				}
+				authentication
+				{
+					header(HttpHeaderAuthentication)
+				}
+			}
+		}
+	}
+}

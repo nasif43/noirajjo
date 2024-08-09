@@ -1,0 +1,26 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: RetroShare
+Upstream-Contact: RetroShare Team <contact@retroshare.cc>
+
+Files: *
+Copyright: 2004-2022, Retroshare Team <contact@retroshare.cc>
+License: AGPL-3.0-only
+
+Files: src/*
+Copyright: 2004-2022, Retroshare Team <contact@retroshare.cc>
+License: LGPL-3.0-or-later
+
+Files: src/deep_search/*
+Copyright: 2018-2022, Gioacchino Mazzurco <gio@eigenlab.org>
+           2019-2022, Asociación Civil Altermundi <info@altermundi.net>
+License: AGPL-3.0-only
+
+Files: src/jsonapi/*
+Copyright: 2018-2022, Gioacchino Mazzurco <gio@eigenlab.org>
+           2019-2022, Asociación Civil Altermundi <info@altermundi.net>
+License: AGPL-3.0-or-later
+
+Files: src/tor/*
+Copyright: 2014, John Brooks <john.brooks@dereferenced.net>
+           2017-2022, Retroshare Team <contact@retroshare.cc>
+License: BSD-3-Clause
